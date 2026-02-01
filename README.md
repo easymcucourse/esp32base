@@ -16,7 +16,7 @@
 | **L1** | [内存与 NVS 持久化](./L1_memory) | 内存架构、Preferences (NVS) 读写 | ✅ 已同步 |
 | **L2** | [数字输入输出 (GPIO)](./L2_digital) | 引脚浮空(Floating)、INPUT_PULLUP/DOWN | ✅ 已同步 |
 | **L3** | [按键检测与消抖](./L3_button) | 边缘检测(Edge Detection)、软件消抖 | ✅ 已同步 |
-| **L4** | [模拟量采集 (ADC & PWM)](./l4_analog) | 12位ADC、LEDC(PWM)新版API、衰减配置 | ✅ 已同步 |
+| **L4** | [模拟量采集 (ADC & PWM)](./L4_analog) | 12位ADC、LEDC(PWM)新版API、衰减配置 | ✅ 已同步 |
 | **L5** | [L298N 电机控制](./L5_L298N) | H桥原理、平滑换向、摇杆调速 | ✅ 已同步 |
 | **L25** | [重力骰子 (Web 版)](./L25_dice_mpu6050) | MPU6050、DMP 数据解析、Web 控制台 | ✅ 已同步 |
 | **L26** | [重力骰子 (BLE 版)](./L26_dice_ble) | 蓝牙低功耗 (BLE)、手机 APP 交互 | ✅ 已同步 |
