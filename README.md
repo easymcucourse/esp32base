@@ -2,7 +2,7 @@
 
 欢迎来到 **轻松易学嵌入式** 的官方代码库！本项目旨在通过一系列精心设计的实战案例，带你从零开始掌握 ESP32 开发，并避开那些常见的“坑”。
 
-📺 **YouTube 频道**: [轻松易学嵌入式](https://www.youtube.com/@easymcu)
+📺 **YouTube 频道**: [轻松易学嵌入式](https://www.youtube.com/watch?v=qLk-9de6BaQ)
 
 ---
 
