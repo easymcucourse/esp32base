@@ -24,7 +24,7 @@
 
 ## 🎮 如何使用
 
-1.  **上传代码**: 将 `L26_dice_ble.ino` 上传至开发板。
+1.  **上传代码**: 将 `L026_dice_ble.ino` 上传至开发板。
 2.  **连接手机**: 
     - 使用安卓/iOS 上的 **nRF Connect** 或 **LightBlue** 软件。
     - 扫描并连接设备：`ESP32_Dice_BLE`。

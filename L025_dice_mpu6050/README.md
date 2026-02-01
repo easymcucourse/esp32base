@@ -25,7 +25,7 @@
 
 ### 3. 下载与上传
 - 使用 [arduino-esp32littlefs-plugin](https://github.com/lorol/arduino-esp32littlefs-plugin) 将 `data` 文件夹内的 `index.html` 上传至开发板。
-- 编译并上传 `L25_dice_mpu6050.ino`。
+- 编译并上传 `L025_dice_mpu6050.ino`。
 
 ---
 
