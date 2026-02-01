@@ -45,6 +45,6 @@ if (lastInputState == LOW && currentInputState == HIGH) {
 ## 🌟 关注我们
 
 如果您觉得这个教程对您有帮助，请订阅我们的频道：
-👉 **[YouTube: 轻松易学嵌入式](https://www.youtube.com/@easymcu)**
+👉 **[YouTube: 轻松易学嵌入式](https://www.youtube.com/@%E8%BD%BB%E6%9D%BE%E6%98%93%E5%AD%A6%E5%B5%8C%E5%85%A5%E5%BC%8F)**
 
 让我们一起轻松玩转嵌入式！
