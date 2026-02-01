@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.staticfile.org/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #111;
+            color: white;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+
+        #ui {
+            position: fixed;
+            padding: 15px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.6);
+            border-bottom-right-radius: 12px;
+            border: 1px solid #444;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        button:active {
+            background: #2e7d32;
+        }
+
+        #stat {
+            color: #ff9800;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui">
+        状态: <span id="stat">连接中...</span><br>
+        IP: <span id="ip-node"></span><br>
+        <div style="margin-top:10px;">
+            <button onclick="totalSync()">一键同步 (1向上, 2面朝我, 3朝左)</button>
+        </div>
+        <div style="font-size:12px; margin-top:8px; color:#888;">
+            <span onclick="doHardReset()" style="cursor:pointer; text-decoration:underline;">重置传感器(需模块水平静止放置)</span>
+        </div>
+    </div>
+    <script>
+        var scene, camera, renderer, dice, isCalibrating = false;
+        var offsetQ = new THREE.Quaternion();    // 传感器到立方体的安装偏置修正
+        var rawQ = new THREE.Quaternion();       // 传感器原始世界旋转
+        var targetQ = new THREE.Quaternion();    // 平滑后的目标世界旋转
+        document.getElementById('ip-node').innerText = window.location.hostname;
+
+        var init3D = function () {
+            try {
+                scene = new THREE.Scene();
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.setClearColor(0x111111);
+                document.body.appendChild(renderer.domElement);
+
+                var getTex = function (n, col) {
+                    var canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 256;
+                    var ctx = canvas.getContext('2d');
+                    // 背景渐变
+                    var grad = ctx.createRadialGradient(128, 128, 50, 128, 128, 150);
+                    grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, '#e0e0e0');
+                    ctx.fillStyle = grad; ctx.fillRect(0, 0, 256, 256);
+                    // 边框
+                    ctx.strokeStyle = '#bdbdbd'; ctx.lineWidth = 12; ctx.strokeRect(6, 6, 244, 244);
+                    // 数字
+                    ctx.fillStyle = col; ctx.font = 'bold 160px "Segoe UI", Arial, sans-serif';
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4;
+                    ctx.fillText(n, 128, 128);
+                    return new THREE.MeshPhysicalMaterial({
+                        map: new THREE.CanvasTexture(canvas),
+                        roughness: 0.1,
+                        metalness: 0.2,
+                        clearcoat: 1.0,
+                        clearcoatRoughness: 0.1
+                    });
+                };
+                // 1:红, 2:蓝, 3:绿, 4:橙, 5:紫, 6:深青
+                var mats = [
+                    getTex('2', '#1a237e'), getTex('5', '#6a1b9a'),
+                    getTex('1', '#d32f2f'), getTex('6', '#006064'),
+                    getTex('3', '#2e7d32'), getTex('4', '#e65100')
+                ];
+                dice = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), mats);
+                dice.castShadow = true;
+                scene.add(dice);
+
+                // 添加地面接收阴影
+                var floor = new THREE.Mesh(
+                    new THREE.PlaneGeometry(20, 20),
+                    new THREE.ShadowMaterial({ opacity: 0.3 })
+                );
+                floor.rotation.x = -Math.PI / 2; floor.position.y = -2;
+                floor.receiveShadow = true;
+                scene.add(floor);
+
+                // 强化灯光效果
+                scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+                var spotLight = new THREE.SpotLight(0xffffff, 1.2);
+                spotLight.position.set(8, 12, 8);
+                spotLight.castShadow = true;
+                spotLight.shadow.mapSize.width = 1024;
+                spotLight.shadow.mapSize.height = 1024;
+                scene.add(spotLight);
+
+                var fillLight = new THREE.PointLight(0xffffff, 0.5);
+                fillLight.position.set(-5, 5, -5);
+                scene.add(fillLight);
+
+                camera.position.set(4.5, 4.5, 4.5);
+                camera.lookAt(0, 0, 0);
+            } catch (e) { }
+        };
+
+        var updateData = function () {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/data?t=' + Date.now(), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4 && xhr.status == 200) {
+                    if (isCalibrating) return;
+                    var d = JSON.parse(xhr.responseText);
+                    if (dice) {
+                        // 坐标系转换说明:
+                        // 传感器 DMP 输出是在其内部世界坐标系 (DMP-Z 向上)
+                        // 网页 Three.js 环境是 (World-Y 向上)
+                        // 映射关系修正: DMP-X -> Web-X, DMP-Z -> Web-Y, DMP-Y -> -Web-Z (保证右手系，解决翻转反向问题)
+                        rawQ.set(d.qx / 100, d.qz / 100, -d.qy / 100, d.qw / 100);
+                        rawQ.normalize();
+
+                        // 计算最终旋转
+                        targetQ.copy(rawQ).multiply(offsetQ);
+                    }
+                    document.getElementById('stat').innerText = "在线";
+                    document.getElementById('stat').style.color = "#4CAF50";
+                }
+            };
+            xhr.send();
+        };
+
+        var totalSync = function () {
+            if (!dice) return;
+
+            // 矩阵说明：Matrix4.set(n11, n12, n13, n14, ...) 是按行设置的。
+            // 物理意义映射 (列向量)：
+            // 第1列 (n11, n21, n31): Cube +X轴 (2面) 指向的世界方向
+            // 第2列 (n12, n22, n32): Cube +Y轴 (1面) 指向的世界方向
+            // 第3列 (n13, n23, n33): Cube +Z轴 (3面) 指向的世界方向
+
+            var targetWorldMatrix = new THREE.Matrix4();
+
+            /* --- 摆放选项 (假设模块水平放置，1面向上) --- */
+
+            // 选项A: 1面向上, 2面朝我(+Z), 3面朝左(-X) [当前默认]
+            targetWorldMatrix.set(
+                0, 0, -1, 0,  // Row 1
+                0, 1, 0, 0,  // Row 2
+                1, 0, 0, 0,  // Row 3
+                0, 0, 0, 1   // Row 4
+            );
+
+            /* 
+            // 选项B: 1面向上, 3面朝我(+Z), 5面朝左(-X)
+            targetWorldMatrix.set(
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            );
+
+            // 选项C: 1面向上, 5面朝我(+Z), 4面朝左(-X)
+            targetWorldMatrix.set(
+                0, 0, 1, 0,
+                0, 1, 0, 0,
+                -1,0, 0, 0,
+                0, 0, 0, 1
+            );
+
+            // 选项D: 1面向上, 4面朝我(+Z), 2面朝左(-X)
+            targetWorldMatrix.set(
+                -1,0, 0, 0,
+                0, 1, 0, 0,
+                0, 0,-1, 0,
+                0, 0, 0, 1
+            );
+            */
+            var cubeToWorldQ = new THREE.Quaternion().setFromRotationMatrix(targetWorldMatrix);
+
+            // 2. 计算偏置: offsetQ
+            // 因为 diceQ = rawQ * offsetQ，所以 offsetQ = rawQ.inv * diceQ
+            offsetQ.copy(rawQ).invert().multiply(cubeToWorldQ);
+
+            document.getElementById('stat').innerText = "同步成功！";
+            setTimeout(() => { document.getElementById('stat').innerText = "在线"; }, 2000);
+        };
+
+        var doHardReset = function () {
+            if (!confirm("确定要重置传感器吗？请确保模块水平静止平放。")) return;
+            isCalibrating = true;
+            document.getElementById('stat').innerText = "传感器重置中...";
+            document.getElementById('stat').style.color = "#ffeb3b";
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/calibrate', true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4) {
+                    isCalibrating = false;
+                    // 重置修正数据
+                    offsetQ.identity();
+                }
+            };
+            xhr.send();
+        };
+
+        var animate = function () {
+            requestAnimationFrame(animate);
+            if (!isCalibrating && renderer && scene && camera) {
+                if (dice) {
+                    // 平滑插值 (slerp)，Factor 越小越平滑，0.2 兼顾响应和手感
+                    dice.quaternion.slerp(targetQ, 0.2);
+                }
+                renderer.render(scene, camera);
+                renderer.domElement.style.display = 'block';
+            } else if (isCalibrating && renderer) {
+                renderer.domElement.style.display = 'none';
+            }
+        };
+
+        window.onload = function () { init3D(); animate(); setInterval(updateData, 33); };
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.staticfile.org/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #111;
+            color: white;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+
+        #ui {
+            position: fixed;
+            padding: 15px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            border-bottom-right-radius: 12px;
+            border: 1px solid #444;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        }
+
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 10px;
+            transition: all 0.2s;
+            display: block;
+            width: 100%;
+        }
+
+        button:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        #btn-connect {
+            background: #4CAF50;
+        }
+
+        #btn-sync {
+            background: #ff9800;
+        }
+
+        #stat {
+            color: #f44336;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui">
+        <div style="font-size: 18px; margin-bottom: 10px; border-bottom: 1px solid #444; padding-bottom: 5px;">ESP32 BLE
+            骰子</div>
+        状态: <span id="stat">未连接</span><br>
+
+        <button id="btn-connect" onclick="connectBLE()">连接蓝牙设备</button>
+        <button id="btn-sync" onclick="totalSync()" style="display:none;">一键同步 (1向上)</button>
+
+        <div id="calib-box" style="display:none; font-size:12px; margin-top:12px; color:#888;">
+            <span onclick="doHardReset()" style="cursor:pointer; text-decoration:underline;">重置传感器(需模块水平静止)</span>
+        </div>
+    </div>
+    <script>
+        // BLE 配置
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+        var scene, camera, renderer, dice, isCalibrating = false;
+        var offsetQ = new THREE.Quaternion();    // 传感器到立方体的安装偏置修正
+        var rawQ = new THREE.Quaternion();       // 传感器原始世界旋转
+        var targetQ = new THREE.Quaternion();    // 平滑后的目标世界旋转
+
+        var bleDevice = null;
+        var bleCharacteristic = null;
+
+        var init3D = function () {
+            try {
+                scene = new THREE.Scene();
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.setClearColor(0x111111);
+                document.body.appendChild(renderer.domElement);
+
+                var getTex = function (n, col) {
+                    var canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 256;
+                    var ctx = canvas.getContext('2d');
+                    var grad = ctx.createRadialGradient(128, 128, 50, 128, 128, 150);
+                    grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, '#e0e0e0');
+                    ctx.fillStyle = grad; ctx.fillRect(0, 0, 256, 256);
+                    ctx.strokeStyle = '#bdbdbd'; ctx.lineWidth = 12; ctx.strokeRect(6, 6, 244, 244);
+                    ctx.fillStyle = col; ctx.font = 'bold 160px "Segoe UI", Arial, sans-serif';
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText(n, 128, 128);
+                    return new THREE.MeshPhysicalMaterial({
+                        map: new THREE.CanvasTexture(canvas),
+                        roughness: 0.1, metalness: 0.2, clearcoat: 1.0
+                    });
+                };
+                var mats = [
+                    getTex('2', '#1a237e'), getTex('5', '#6a1b9a'),
+                    getTex('1', '#d32f2f'), getTex('6', '#006064'),
+                    getTex('3', '#2e7d32'), getTex('4', '#e65100')
+                ];
+                dice = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), mats);
+                dice.castShadow = true;
+                scene.add(dice);
+
+                var floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.ShadowMaterial({ opacity: 0.3 }));
+                floor.rotation.x = -Math.PI / 2; floor.position.y = -2;
+                floor.receiveShadow = true;
+                scene.add(floor);
+
+                scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+                var spotLight = new THREE.SpotLight(0xffffff, 1.2);
+                spotLight.position.set(8, 12, 8); spotLight.castShadow = true;
+                scene.add(spotLight);
+
+                camera.position.set(4.5, 4.5, 4.5);
+                camera.lookAt(0, 0, 0);
+            } catch (e) { console.error(e); }
+        };
+
+        async function connectBLE() {
+            try {
+                const stat = document.getElementById('stat');
+                stat.innerText = "正在扫描...";
+
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'ESP32_Dice' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                stat.innerText = "连接中...";
+                const server = await bleDevice.gatt.connect();
+
+                stat.innerText = "发现服务...";
+                const service = await server.getPrimaryService(SERVICE_UUID);
+
+                stat.innerText = "获取特征...";
+                bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+                await bleCharacteristic.startNotifications();
+                bleCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+
+                stat.innerText = "已连接";
+                stat.style.color = "#4CAF50";
+                document.getElementById('btn-connect').style.display = 'none';
+                document.getElementById('btn-sync').style.display = 'block';
+                document.getElementById('calib-box').style.display = 'block';
+
+                bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('stat').innerText = "连接失败";
+            }
+        }
+
+        function onDisconnected() {
+            document.getElementById('stat').innerText = "已断开";
+            document.getElementById('stat').style.color = "#f44336";
+            document.getElementById('btn-connect').style.display = 'block';
+            document.getElementById('btn-sync').style.display = 'none';
+            document.getElementById('calib-box').style.display = 'none';
+        }
+
+        function handleNotifications(event) {
+            if (isCalibrating) return;
+
+            let value = event.target.value;
+            // 数据格式: int16_t w, x, y, z (Little Endian, 8 bytes total)
+            let w = value.getInt16(0, true);
+            let x = value.getInt16(2, true);
+            let y = value.getInt16(4, true);
+            let z = value.getInt16(6, true);
+
+            if (dice) {
+                // 坐标系转换修正 (与原版本一致)
+                rawQ.set(x / 100, z / 100, -y / 100, w / 100);
+                rawQ.normalize();
+                targetQ.copy(rawQ).multiply(offsetQ);
+            }
+        }
+
+        var totalSync = function () {
+            if (!dice) return;
+            var targetWorldMatrix = new THREE.Matrix4();
+            // 默认姿态: 1面向上, 2面朝向用户
+            targetWorldMatrix.set(
+                0, 0, -1, 0,
+                0, 1, 0, 0,
+                1, 0, 0, 0,
+                0, 0, 0, 1
+            );
+            var cubeToWorldQ = new THREE.Quaternion().setFromRotationMatrix(targetWorldMatrix);
+            offsetQ.copy(rawQ).invert().multiply(cubeToWorldQ);
+
+            const tmpStat = document.getElementById('stat').innerText;
+            document.getElementById('stat').innerText = "同步成功";
+            setTimeout(() => { document.getElementById('stat').innerText = tmpStat; }, 1000);
+        };
+
+        var doHardReset = function () {
+            if (!bleCharacteristic) return;
+            if (!confirm("确定要重置传感器吗？请确保模块水平静止平放。")) return;
+
+            isCalibrating = true;
+            document.getElementById('stat').innerText = "校准中...";
+            document.getElementById('stat').style.color = "#ffeb3b";
+
+            // 发送指令 "calibrate"
+            const encoder = new TextEncoder();
+            const data = encoder.encode("calibrate");
+
+            bleCharacteristic.writeValue(data).then(() => {
+                console.log("Calibration command sent");
+                // 模拟一个等待时间，或者可以根据特征通知来判断校准结束
+                setTimeout(() => {
+                    isCalibrating = false;
+                    offsetQ.identity(); // 重置网页端的偏置
+                    document.getElementById('stat').innerText = "已连接";
+                    document.getElementById('stat').style.color = "#4CAF50";
+                    alert("校准完成！");
+                }, 5000); // 假设校准需要5秒
+            }).catch(error => {
+                console.error("Write error:", error);
+                isCalibrating = false;
+                alert("发送指令失败");
+            });
+        };
+
+        var animate = function () {
+            requestAnimationFrame(animate);
+            if (!isCalibrating && renderer && scene && camera) {
+                if (dice) {
+                    dice.quaternion.slerp(targetQ, 0.2);
+                }
+                renderer.render(scene, camera);
+            }
+        };
+
+        window.onload = function () {
+            init3D();
+            animate();
+        };
+    </script>
+</body>
+
+</html>
