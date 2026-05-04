@@ -2,7 +2,7 @@
 #include <SD_MMC.h>
 #include "AudioGeneratorAAC.h"
 #include "AudioOutputI2S.h"
-#include "AudioFileSource.h"
+#include "AudioFileSourceFS.h"
 
 // ==================== 1. 硬件引脚定义 ====================
 // MAX98357A I2S Speaker (Output)
@@ -18,33 +18,9 @@
 #define SD_CLK 7
 #define SD_CMD 6
 
-// ==================== 2. 封装 SDMMC 文件源 ====================
-// 为了确保兼容性并避免引用冲突，我们自己封装一个继承自 AudioFileSource 的 SD_MMC 播放源
-class AudioFileSourceSDMMC : public AudioFileSource {
-  public:
-    AudioFileSourceSDMMC(const char *filename) {
-        f = SD_MMC.open(filename, FILE_READ);
-    }
-    virtual ~AudioFileSourceSDMMC() { if (f) f.close(); }
-    virtual uint32_t read(void *data, uint32_t len) override {
-        if (!f) return 0;
-        return f.read((uint8_t*)data, len);
-    }
-    virtual bool seek(int32_t pos, int dir) override {
-        if (!f) return false;
-        return f.seek(pos, (SeekMode)dir);
-    }
-    virtual bool close() override { if (f) f.close(); return true; }
-    virtual bool isOpen() override { return f; }
-    virtual uint32_t getSize() override { return f ? f.size() : 0; }
-    virtual uint32_t getPos() override { return f ? f.position() : 0; }
-  private:
-    File f;
-};
-
 // ==================== 3. 全局播放器对象 ====================
 AudioGeneratorAAC *aac = NULL;
-AudioFileSourceSDMMC *file = NULL;
+AudioFileSourceFS *file = NULL;
 AudioOutputI2S *out = NULL;
 
 //
@@ -75,7 +51,7 @@ void setup() {
     // 转换命令
     // ffmpeg -i input.mp3 -c:a aac -b:a 128k test.aac
     Serial.println("[Info] Opening /test.aac ...");
-    file = new AudioFileSourceSDMMC("/test.aac");
+    file = new AudioFileSourceFS(SD_MMC, "/test.aac");
     aac = new AudioGeneratorAAC();
 
     if (file->isOpen()) {
@@ -95,7 +71,7 @@ void loop() {
             
             // 重新释放并打开文件，实现循环播放
             delete file;
-            file = new AudioFileSourceSDMMC("/test.aac");
+            file = new AudioFileSourceFS(SD_MMC, "/test.aac");
             aac->begin(file, out);
         }
     }
