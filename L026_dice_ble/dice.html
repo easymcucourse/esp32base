@@ -67,6 +67,7 @@
         <div style="font-size: 18px; margin-bottom: 10px; border-bottom: 1px solid #444; padding-bottom: 5px;">ESP32 BLE
             骰子</div>
         状态: <span id="stat">未连接</span><br>
+        计数: <span id="pkt-count">0</span><br>
 
         <button id="btn-connect" onclick="connectBLE()">连接蓝牙设备</button>
         <button id="btn-sync" onclick="totalSync()" style="display:none;">一键同步 (1向上)</button>
@@ -144,7 +145,7 @@
                 stat.innerText = "正在扫描...";
 
                 bleDevice = await navigator.bluetooth.requestDevice({
-                    filters: [{ namePrefix: 'ESP32_Dice' }],
+                    acceptAllDevices: true,
                     optionalServices: [SERVICE_UUID]
                 });
 
@@ -157,8 +158,10 @@
                 stat.innerText = "获取特征...";
                 bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
 
-                await bleCharacteristic.startNotifications();
                 bleCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+                await bleCharacteristic.startNotifications();
+                
+                console.log("BLE Notifications started");
 
                 stat.innerText = "已连接";
                 stat.style.color = "#4CAF50";
@@ -191,6 +194,13 @@
             let x = value.getInt16(2, true);
             let y = value.getInt16(4, true);
             let z = value.getInt16(6, true);
+            
+            // 收到数据就更新计数
+            window.pktCount = (window.pktCount || 0) + 1;
+            document.getElementById('pkt-count').innerText = window.pktCount;
+            
+            // 打印每一条数据进行调试
+            console.log("Packet received:", {w, x, y, z});
 
             if (dice) {
                 // 坐标系转换修正 (与原版本一致)

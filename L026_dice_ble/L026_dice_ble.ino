@@ -60,13 +60,20 @@ class MyServerCallbacks: public BLEServerCallbacks {
  */
 void setup() {
     Serial.begin(115200); 
-    delay(1000);
+    delay(2000); 
     
-    // 模块化初始化
-    initMPU();        // 传感器及后台采样任务初始化
-    initBLE();        // BLE 初始化
+    Serial.println("--- System Booting ---");
     
-    Serial.println("Setup Complete. BLE Advertising...");
+    // 优先初始化 BLE (BLE 占用资源大，率先启动更稳定)
+    Serial.println("Step 1: Initializing BLE...");
+    initBLE();
+    delay(500);
+    
+    // 初始化 MPU
+    Serial.println("Step 2: Initializing MPU...");
+    initMPU();
+    
+    Serial.println("--- Setup Complete. Waiting for connections ---");
 }
 
 /**
@@ -107,7 +114,7 @@ void initMPU() {
 
 class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue();
+      String value = pCharacteristic->getValue().c_str();
       if (value.length() > 0) {
         Serial.println("*********");
         Serial.print("New value: ");
@@ -128,17 +135,18 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
  * @brief 初始化BLE服务
  */
 void initBLE() {
-    // 创建 BLE 设备
+    Serial.println(">>> Initializing BLE...");
+
     BLEDevice::init("ESP32_Dice_BLE");
 
-    // 创建 BLE 服务端
+    Serial.print(">>> BLE MAC: ");
+    Serial.println(BLEDevice::getAddress().toString().c_str());
+
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
 
-    // 创建 BLE 服务
     BLEService *pService = pServer->createService(SERVICE_UUID);
 
-    // 创建 BLE 特征
     pCharacteristic = pService->createCharacteristic(
                         CHARACTERISTIC_UUID,
                         BLECharacteristic::PROPERTY_READ   |
@@ -147,22 +155,24 @@ void initBLE() {
                         BLECharacteristic::PROPERTY_INDICATE
                       );
 
-    // 设置特征回调
     pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
 
-    // 创建 BLE 描述符
+    // 添加 CCCD 描述符，确保通知功能在所有客户端上都能被正确激活
     pCharacteristic->addDescriptor(new BLE2902());
 
-    // 启动服务
     pService->start();
 
     // 开始广播
+    Serial.println("   [BLE] Configuring Advertising...");
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
-    pServer->getAdvertising()->start();
-    Serial.println("Waiting for a client connection to notify...");
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06); // 7.5ms
+    pAdvertising->setMaxPreferred(0x12); // 22.5ms
+
+    Serial.println("   [BLE] Starting Advertising...");
+    BLEDevice::startAdvertising();
+    Serial.println("   [BLE] initBLE complete.");
 }
 
 /**
@@ -173,13 +183,19 @@ void mpuTask(void *pvParameters) {
         updateMPUData();
 
         // 如果设备已连接，通过 BLE 发送数据
-        if (deviceConnected) {
-            // 将结构体数据作为字节数组发送
+        if (deviceConnected && pCharacteristic) {
             pCharacteristic->setValue((uint8_t*)&q_int, sizeof(q_int));
             pCharacteristic->notify();
+            
+            // 每隔一段时间打印一次，确认任务在运行
+            static uint32_t lastPrint = 0;
+            if (millis() - lastPrint > 1000) {
+                Serial.printf("BLE Notify: w:%d x:%d y:%d z:%d\n", q_int.w, q_int.x, q_int.y, q_int.z);
+                lastPrint = millis();
+            }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(25)); // 40Hz (25ms) 更新率，兼顾流畅度与性能
+        vTaskDelay(pdMS_TO_TICKS(20)); // 提高到 50Hz
     }
 }
 
@@ -326,7 +342,7 @@ void loop() {
     // disconnecting
     if (!deviceConnected && oldDeviceConnected) {
         delay(500); // give the bluetooth stack the chance to get things ready
-        pServer->startAdvertising(); // restart advertising
+        BLEDevice::startAdvertising(); // restart advertising
         Serial.println("Start advertising");
         oldDeviceConnected = deviceConnected;
     }
@@ -334,5 +350,6 @@ void loop() {
     if (deviceConnected && !oldDeviceConnected) {
         // do stuff here on connecting
         oldDeviceConnected = deviceConnected;
+        Serial.println(">>> BLE Client Connected!");
     }
 }
