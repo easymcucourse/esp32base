@@ -1,3 +1,7 @@
 # Arduino build folders
 .arduino-build-*
 .arduino-build-L027
+
+# ESP-IDF build artifacts
+**/build/
+**/build-*/
